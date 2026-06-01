@@ -16,10 +16,18 @@ let saveTimer = null;
 
 // ── Boot ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  applyTheme(localStorage.getItem('theme') === 'light');
   items = await DB.getAllRecords();
   renderGrid();
   bindEvents();
 });
+
+// ── Theme ─────────────────────────────────────────────────────
+function applyTheme(isLight) {
+  document.documentElement.classList.toggle('light', isLight);
+  localStorage.setItem('theme', isLight ? 'light' : 'dark');
+  document.getElementById('theme-toggle').checked = isLight;
+}
 
 // ── Grid ──────────────────────────────────────────────────────
 function renderGrid() {
@@ -84,8 +92,8 @@ async function openNewNote() {
 
 async function saveCurrentNote() {
   if (!currentItem || currentItem.type !== 'note') return;
-  currentItem.title   = document.getElementById('editor-title').value;
-  currentItem.content = document.getElementById('editor-pad').value;
+  currentItem.title     = document.getElementById('editor-title').value;
+  currentItem.content   = document.getElementById('editor-pad').value;
   currentItem.updatedAt = Date.now();
   await DB.saveRecord(currentItem);
 }
@@ -94,7 +102,6 @@ async function closeEditor() {
   clearTimeout(saveTimer);
   await saveCurrentNote();
 
-  // Auto-delete empty notes
   if (!currentItem.title?.trim() && !currentItem.content?.trim()) {
     await DB.deleteRecord(currentItem.id);
     items = items.filter(i => i.id !== currentItem.id);
@@ -117,17 +124,28 @@ async function deleteCurrentNote() {
 // ── Image Viewer ──────────────────────────────────────────────
 function openViewer(item) {
   currentItem = item;
-  document.getElementById('viewer-img').src            = item.imageData;
-  document.getElementById('viewer-title').textContent  = item.imageName || 'Image';
+  document.getElementById('viewer-img').src          = item.imageData;
+  document.getElementById('viewer-title').value      = item.imageName || '';
   showScreen('viewer');
 }
 
-function closeViewer() {
+async function saveCurrentImage() {
+  if (!currentItem || currentItem.type !== 'image') return;
+  currentItem.imageName = document.getElementById('viewer-title').value;
+  currentItem.updatedAt = Date.now();
+  await DB.saveRecord(currentItem);
+}
+
+async function closeViewer() {
+  clearTimeout(saveTimer);
+  await saveCurrentImage();
   currentItem = null;
   hideScreen('viewer');
+  renderGrid();
 }
 
 async function deleteCurrentImage() {
+  clearTimeout(saveTimer);
   await DB.deleteRecord(currentItem.id);
   items = items.filter(i => i.id !== currentItem.id);
   currentItem = null;
@@ -148,7 +166,7 @@ function handleImageFile(file) {
   reader.readAsDataURL(file);
 }
 
-// ── Screen helpers ────────────────────────────────────────────
+// ── Screen / Sheet helpers ────────────────────────────────────
 function showScreen(id) { document.getElementById(id).classList.add('screen--visible'); }
 function hideScreen(id) { document.getElementById(id).classList.remove('screen--visible'); }
 
@@ -156,29 +174,24 @@ function showSheet(id) {
   closeAllSheets();
   document.getElementById(id).classList.add('sheet--open');
   document.getElementById('backdrop').classList.add('backdrop--visible');
+  document.body.classList.add('sheet-active');
 }
 
 function closeAllSheets() {
   document.querySelectorAll('.sheet').forEach(s => s.classList.remove('sheet--open'));
   document.getElementById('backdrop').classList.remove('backdrop--visible');
+  document.body.classList.remove('sheet-active');
 }
 
 // ── Reset ─────────────────────────────────────────────────────
 async function resetEverything() {
-  // Nuke IDB
   indexedDB.deleteDatabase('appDB');
-
-  // Nuke all caches
   const keys = await caches.keys();
   await Promise.all(keys.map(k => caches.delete(k)));
-
-  // Unregister SW
   if ('serviceWorker' in navigator) {
     const regs = await navigator.serviceWorker.getRegistrations();
     await Promise.all(regs.map(r => r.unregister()));
   }
-
-  // Hard reload — bypasses cache
   location.reload(true);
 }
 
@@ -204,6 +217,7 @@ function bindEvents() {
 
   // Settings
   document.getElementById('settings-btn').addEventListener('click', () => showSheet('settings-sheet'));
+  document.getElementById('theme-toggle').addEventListener('change', (e) => applyTheme(e.target.checked));
   document.getElementById('reset-btn').addEventListener('click', async () => {
     if (confirm('Delete all notes and images, clear cache, unregister service worker?')) {
       await resetEverything();
@@ -213,7 +227,7 @@ function bindEvents() {
   // Backdrop
   document.getElementById('backdrop').addEventListener('click', closeAllSheets);
 
-  // Editor
+  // Note editor
   document.getElementById('editor-back').addEventListener('click', closeEditor);
   document.getElementById('editor-delete').addEventListener('click', async () => {
     if (confirm('Delete this note?')) await deleteCurrentNote();
@@ -221,22 +235,23 @@ function bindEvents() {
 
   const titleEl = document.getElementById('editor-title');
   const padEl   = document.getElementById('editor-pad');
-
   [titleEl, padEl].forEach(el => {
     el.addEventListener('input', () => {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(saveCurrentNote, 500);
     });
   });
-
-  // iOS: prevent viewport jump when keyboard opens
   padEl.addEventListener('focus', () => {
     setTimeout(() => { window.scrollTo(0, 0); document.body.scrollTop = 0; }, 300);
   });
 
-  // Viewer
+  // Image viewer
   document.getElementById('viewer-back').addEventListener('click', closeViewer);
   document.getElementById('viewer-delete').addEventListener('click', async () => {
     if (confirm('Delete this image?')) await deleteCurrentImage();
+  });
+  document.getElementById('viewer-title').addEventListener('input', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveCurrentImage, 500);
   });
 }
